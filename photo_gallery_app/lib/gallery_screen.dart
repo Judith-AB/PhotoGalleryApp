@@ -12,6 +12,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
   Map<String, List<String>> albums = {"All Photos": []};
   List<String> favorites = [];
   String selectedAlbum = "All Photos";
+  Set<String> selectedPhotos = {};
 
   @override
   void initState() {
@@ -21,13 +22,14 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   Future<void> _loadData() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
+    List<String> albumNames = prefs.getStringList('albums') ?? [];
+    Map<String, List<String>> loadedAlbums = {};
+    for (String name in albumNames) {
+      loadedAlbums[name] = prefs.getStringList(name) ?? [];
+    }
+
     setState(() {
-      albums = Map<String, List<String>>.from(prefs
-              .getStringList('albums')
-              ?.asMap()
-              .map((_, album) =>
-                  MapEntry(album, prefs.getStringList(album) ?? [])) ??
-          {"All Photos": []});
+      albums = loadedAlbums.isNotEmpty ? loadedAlbums : {"All Photos": []};
       favorites = prefs.getStringList('favorites') ?? [];
     });
   }
@@ -41,7 +43,6 @@ class _GalleryScreenState extends State<GalleryScreen> {
         albums[selectedAlbum] ??= [];
         List<String> paths = pickedFiles.map((file) => file.path).toList();
 
-        // 🛑 Prevent duplicates by checking if they already exist
         for (String path in paths) {
           if (!albums[selectedAlbum]!.contains(path)) {
             albums[selectedAlbum]!.add(path);
@@ -51,10 +52,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
           }
         }
       });
-
-      // Save only after preventing duplicates
-      await prefs.setStringList(selectedAlbum, albums[selectedAlbum]!);
-      await prefs.setStringList("All Photos", albums["All Photos"]!);
+      await _saveAlbums();
     }
   }
 
@@ -117,7 +115,6 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   Future<void> _deleteAlbum(String albumName) async {
     if (albumName == "All Photos") return;
-    SharedPreferences prefs = await SharedPreferences.getInstance();
     setState(() {
       albums.remove(albumName);
       selectedAlbum = "All Photos";
@@ -127,12 +124,42 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
   Future<void> _deletePhoto(String photoPath) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
+
+    // Save the photo's album context
+    String album = selectedAlbum;
+    bool wasFavorite = favorites.contains(photoPath);
+
+    // Remove the photo
     setState(() {
       albums[selectedAlbum]?.remove(photoPath);
-      albums["All Photos"]?.remove(photoPath);
+      if (selectedAlbum != "All Photos") {
+        albums["All Photos"]?.remove(photoPath);
+      }
       favorites.remove(photoPath);
     });
+
     _saveAlbums();
+
+    // Show SnackBar with Undo
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text("Photo deleted"),
+        action: SnackBarAction(
+          label: "Undo",
+          onPressed: () {
+            setState(() {
+              albums[album]?.add(photoPath);
+              if (!albums["All Photos"]!.contains(photoPath)) {
+                albums["All Photos"]!.add(photoPath);
+              }
+              if (wasFavorite) favorites.add(photoPath);
+            });
+            _saveAlbums();
+          },
+        ),
+        duration: Duration(seconds: 5),
+      ),
+    );
   }
 
   Future<void> _toggleFavorite(String photoPath) async {
@@ -147,6 +174,49 @@ class _GalleryScreenState extends State<GalleryScreen> {
     await prefs.setStringList('favorites', favorites);
   }
 
+  Future<void> _moveSelectedPhotos() async {
+    if (selectedPhotos.isEmpty) return;
+
+    String? targetAlbum = await showDialog<String>(
+      context: context,
+      builder: (context) {
+        return SimpleDialog(
+          title: Text("Move to Album"),
+          children: albums.keys
+              .where((a) => a != selectedAlbum && a != "All Photos")
+              .map((albumName) => SimpleDialogOption(
+                    child: Text(albumName),
+                    onPressed: () => Navigator.pop(context, albumName),
+                  ))
+              .toList(),
+        );
+      },
+    );
+
+    if (targetAlbum != null) {
+      setState(() {
+        for (String photo in selectedPhotos) {
+          // Only remove from current album if it's not "All Photos"
+          if (selectedAlbum != "All Photos") {
+            albums[selectedAlbum]?.remove(photo);
+          }
+
+          // Add to target album if not already there
+          if (!albums[targetAlbum]!.contains(photo)) {
+            albums[targetAlbum]!.add(photo);
+          }
+
+          // Always ensure it's in All Photos
+          if (!albums["All Photos"]!.contains(photo)) {
+            albums["All Photos"]!.add(photo);
+          }
+        }
+        selectedPhotos.clear();
+      });
+      _saveAlbums();
+    }
+  }
+
   Future<void> _saveAlbums() async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
     await prefs.setStringList('albums', albums.keys.toList());
@@ -155,24 +225,34 @@ class _GalleryScreenState extends State<GalleryScreen> {
     }
   }
 
+  void _viewPhoto(String path) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => Scaffold(
+          appBar: AppBar(),
+          body: Center(child: Image.file(File(path))),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    List<String> photos;
-    if (selectedAlbum == "Favorites") {
-      photos = favorites;
-    } else {
-      photos = albums[selectedAlbum] ?? [];
-    }
+    List<String> photos =
+        selectedAlbum == "Favorites" ? favorites : albums[selectedAlbum] ?? [];
 
     return Scaffold(
       appBar: AppBar(
         title: Text("Photo Gallery"),
         actions: [
+          if (selectedPhotos.isNotEmpty)
+            IconButton(
+                icon: Icon(Icons.drive_file_move),
+                onPressed: _moveSelectedPhotos),
           PopupMenuButton<String>(
             onSelected: (value) {
-              setState(() {
-                selectedAlbum = value;
-              });
+              setState(() => selectedAlbum = value);
             },
             itemBuilder: (context) => [
               ...albums.keys.map(
@@ -191,32 +271,55 @@ class _GalleryScreenState extends State<GalleryScreen> {
               itemCount: photos.length,
               itemBuilder: (context, index) {
                 String photo = photos[index];
-                return Stack(
-                  children: [
-                    Image.file(File(photo),
-                        fit: BoxFit.cover, width: double.infinity),
-                    Positioned(
-                      top: 5,
-                      right: 5,
-                      child: IconButton(
-                        icon: Icon(
-                          favorites.contains(photo)
-                              ? Icons.favorite
-                              : Icons.favorite_border,
-                          color: Colors.red,
+                bool isSelected = selectedPhotos.contains(photo);
+                return GestureDetector(
+                  onTap: () => _viewPhoto(photo),
+                  onLongPress: () {
+                    setState(() {
+                      if (isSelected)
+                        selectedPhotos.remove(photo);
+                      else
+                        selectedPhotos.add(photo);
+                    });
+                  },
+                  child: Stack(
+                    children: [
+                      Opacity(
+                        opacity: isSelected ? 0.6 : 1.0,
+                        child: Image.file(File(photo),
+                            fit: BoxFit.cover,
+                            width: double.infinity,
+                            height: double.infinity),
+                      ),
+                      if (isSelected)
+                        Positioned(
+                          top: 5,
+                          left: 5,
+                          child: Icon(Icons.check_circle, color: Colors.green),
                         ),
-                        onPressed: () => _toggleFavorite(photo),
+                      Positioned(
+                        top: 5,
+                        right: 5,
+                        child: IconButton(
+                          icon: Icon(
+                            favorites.contains(photo)
+                                ? Icons.favorite
+                                : Icons.favorite_border,
+                            color: Colors.red,
+                          ),
+                          onPressed: () => _toggleFavorite(photo),
+                        ),
                       ),
-                    ),
-                    Positioned(
-                      bottom: 5,
-                      right: 5,
-                      child: IconButton(
-                        icon: Icon(Icons.delete, color: Colors.white),
-                        onPressed: () => _deletePhoto(photo),
+                      Positioned(
+                        bottom: 5,
+                        right: 5,
+                        child: IconButton(
+                          icon: Icon(Icons.delete, color: Colors.white),
+                          onPressed: () => _deletePhoto(photo),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 );
               },
             ),
