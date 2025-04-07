@@ -125,11 +125,11 @@ class _GalleryScreenState extends State<GalleryScreen> {
   Future<void> _deletePhoto(String photoPath) async {
     SharedPreferences prefs = await SharedPreferences.getInstance();
 
-    // Save the photo's album context
+ 
     String album = selectedAlbum;
     bool wasFavorite = favorites.contains(photoPath);
 
-    // Remove the photo
+ 
     setState(() {
       albums[selectedAlbum]?.remove(photoPath);
       if (selectedAlbum != "All Photos") {
@@ -140,7 +140,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
     _saveAlbums();
 
-    // Show SnackBar with Undo
+   
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text("Photo deleted"),
@@ -196,17 +196,16 @@ class _GalleryScreenState extends State<GalleryScreen> {
     if (targetAlbum != null) {
       setState(() {
         for (String photo in selectedPhotos) {
-          // Only remove from current album if it's not "All Photos"
+         
           if (selectedAlbum != "All Photos") {
             albums[selectedAlbum]?.remove(photo);
           }
 
-          // Add to target album if not already there
           if (!albums[targetAlbum]!.contains(photo)) {
             albums[targetAlbum]!.add(photo);
           }
 
-          // Always ensure it's in All Photos
+      
           if (!albums["All Photos"]!.contains(photo)) {
             albums["All Photos"]!.add(photo);
           }
